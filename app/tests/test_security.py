@@ -15,6 +15,9 @@ def unique(name):
     return f"{name}{uuid.uuid4().hex[:8]}"
 
 def authenticate():
+    # Tests are independent; production limiter intentionally keeps per-IP state.
+    limiter.requests.clear()
+    limiter.blocked_until.clear()
     username = unique("student")
     response = client.post("/api/v1/auth/register", json={"username": username, "email": f"{username}@example.com", "password": "StrongPass1!"})
     assert response.status_code == 201
@@ -50,3 +53,14 @@ def test_rsa_pss_detects_tampering():
     signature = sign(b"approved", private)
     assert verify(b"approved", signature, public)
     assert not verify(b"rejected", signature, public)
+
+def test_encrypted_signed_document_round_trip():
+    access, _ = authenticate()
+    headers = {"Authorization": f"Bearer {access}"}
+    upload = client.post("/api/v1/documents/upload", headers=headers,
+                         files={"file": ("report.txt", b"CONFIDENTIAL REPORT", "text/plain")})
+    assert upload.status_code == 201
+    download = client.get(f"/api/v1/documents/{upload.json()['id']}/download", headers=headers)
+    assert download.status_code == 200
+    assert download.content == b"CONFIDENTIAL REPORT"
+    assert download.headers["x-signature-status"] == "Signed & Verified"
